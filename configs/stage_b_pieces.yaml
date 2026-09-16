@@ -1,0 +1,21 @@
+# Cấu hình Giai đoạn B: Định vị quân cờ trên ảnh đã chuẩn hóa (Piece Detection)
+
+model:
+  weights_path: "models/stage_b_yolo_nano.pt"
+  conf_threshold: 0.35
+  iou_threshold: 0.45
+  input_size: [800, 720]  # Phù hợp kích thước canvas chuẩn hóa
+  device: "cuda"  # hoặc "cpu"
+  
+  # Số lớp dự đoán ở giai đoạn B:
+  # 1: chỉ phát hiện vị trí có quân cờ (piece)
+  # 2: phát hiện vị trí + màu quân sơ bộ (red / black)
+  num_classes: 1
+  classes:
+    0: "piece"
+
+detection_params:
+  # Kích thước xấp xỉ của quân cờ trên ảnh chuẩn hóa (dùng để kiểm tra hợp lệ hoặc padding khi crop)
+  expected_piece_radius_px: 30
+  crop_padding: 4  # Mở rộng vùng crop thêm vài pixel để classifier nhìn rõ viền và chữ
+  target_crop_size: [64, 64]  # Kích thước đưa vào Giai đoạn C

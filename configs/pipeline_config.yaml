@@ -1,0 +1,50 @@
+# Cấu hình Pipeline tổng hợp (End-to-End Chinese Chess Vision Pipeline)
+
+# Đường dẫn đến các cấu hình thành phần
+stage_a_config: "configs/stage_a_board.yaml"
+stage_b_config: "configs/stage_b_pieces.yaml"
+stage_c_config: "configs/stage_c_classifier.yaml"
+
+realtime:
+  # Cơ chế phát hiện chuyển động & ổn định bàn cờ (Change Detection & Debounce)
+  change_detection:
+    enabled: true
+    # Ngưỡng cường độ thay đổi giữa 2 khung hình liên tiếp
+    motion_threshold: 15.0
+    # Số frame liên tiếp không có chuyển động để xác định bàn cờ đã ổn định (tay người đã rút đi)
+    stability_frames_required: 15  # Tương đương ~0.5s ở tốc độ 30fps
+    # Tần suất tối đa chạy Giai đoạn A (Corner detection) khi không có sự dịch chuyển vị trí camera
+    stage_a_interval_seconds: 30.0
+    # Kích thước khung hình để tính diff nhanh
+    diff_downsample_size: [320, 240]
+
+post_processing:
+  # Thuật toán Snap vào lưới 9x10
+  grid_snapping:
+    # Bán kính pixel tối đa cho phép snap vào 1 giao điểm trên ảnh chuẩn hóa (720x800)
+    # Khoảng cách giữa 2 cột ~80px, khoảng cách giữa 2 hàng ~80px -> bán kính snap tối đa ~38px
+    max_snap_radius_px: 38.0
+    # Chiến lược xử lý khi 2 detection snap vào cùng 1 giao điểm: "highest_conf" hoặc "nearest"
+    conflict_resolution: "highest_conf"
+    
+  # Ràng buộc luật cờ tướng (Rule constraints)
+  rule_constraints:
+    # Số lượng quân tối đa hợp lệ cho mỗi bên (Red / Black)
+    max_piece_counts:
+      king: 1
+      advisor: 2
+      elephant: 2
+      horse: 2
+      chariot: 2
+      cannon: 2
+      soldier: 5
+    # Nếu vượt quá giới hạn, ưu tiên giữ lại các quân có confidence phân loại cao nhất
+    enforce_max_counts: true
+    # Cảnh báo vị trí bất thường (ví dụ: Tượng qua sông, Tướng ra khỏi cửu cung)
+    check_board_boundaries: true
+
+output:
+  export_fen: true
+  export_matrix: true
+  save_visualization: true
+  debug_mode: true

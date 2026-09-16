@@ -1,0 +1,49 @@
+# Cấu hình Giai đoạn C: Phân loại chi tiết 14 loại quân cờ (Fine-grained Piece Classification)
+
+model:
+  backbone: "mobilenet_v3_small"  # Hỗ trợ: mobilenet_v3_small, mobilenet_v3_large, custom_cnn
+  weights_path: "models/stage_c_classifier.pt"
+  num_classes: 14
+  input_size: [64, 64]
+  pretrained: true
+  device: "cuda"  # hoặc "cpu"
+
+training:
+  batch_size: 64
+  epochs: 50
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler: "cosine"  # cosine, step, reduce_on_plateau
+  loss_function: "focal_loss"  # focal_loss, weighted_ce, ce
+  focal_loss_gamma: 2.0
+  
+  # Cân bằng dữ liệu (Handling Class Imbalance)
+  # 1 King, 2 Advisors, 2 Elephants, 2 Horses, 2 Chariots, 2 Cannons, 5 Soldiers
+  use_class_weights: true
+
+augmentation:
+  # Xoay ngẫu nhiên vì quân cờ trên bàn có thể bị xoay theo bất kỳ góc nào
+  random_rotation_degrees: 180
+  color_jitter:
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.2
+  gaussian_blur: true
+  random_crop_padding: 2
+
+# Danh mục 14 lớp chuẩn
+classes:
+  0: "r_king"      # Tướng Đỏ (帥)
+  1: "r_advisor"   # Sĩ Đỏ (仕)
+  2: "r_elephant"  # Tượng Đỏ (相)
+  3: "r_horse"     # Mã Đỏ (傌)
+  4: "r_chariot"   # Xe Đỏ (俥)
+  5: "r_cannon"    # Pháo Đỏ (炮)
+  6: "r_soldier"   # Tốt Đỏ (兵)
+  7: "b_king"      # Tướng Đen (將)
+  8: "b_advisor"   # Sĩ Đen (士)
+  9: "b_elephant"  # Tượng Đen (象)
+  10: "b_horse"    # Mã Đen (馬)
+  11: "b_chariot"  # Xe Đen (車)
+  12: "b_cannon"   # Pháo Đen (砲)
+  13: "b_soldier"  # Tốt Đen (卒)

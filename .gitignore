@@ -1,0 +1,71 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ========================
+# Virtual Environment
+# ========================
+venv/
+.venv/
+env/
+.env
+
+# ========================
+# Model Weights (có thể rất nặng)
+# ========================
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.weights
+# Nếu muốn push weights lên thì comment dòng trên và dùng Git LFS
+
+# ========================
+# Dataset (thường rất nặng, không push raw data)
+# ========================
+data/raw/
+data/images/
+data/labels/
+data/*.zip
+data/*.tar.gz
+
+# ========================
+# Jupyter Notebook
+# ========================
+.ipynb_checkpoints/
+*.ipynb
+
+# ========================
+# IDE / Editor
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ========================
+# Test & Coverage
+# ========================
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ========================
+# Logs & Output
+# ========================
+*.log
+runs/
+outputs/
+results/

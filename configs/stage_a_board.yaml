@@ -1,0 +1,35 @@
+# Cấu hình Giai đoạn A: Định vị & Chuẩn hóa bàn cờ (Board Localization & Rectification)
+
+model:
+  weights_path: "models/stage_a_yolo_pose.pt"
+  conf_threshold: 0.5
+  iou_threshold: 0.45
+  input_size: [640, 640]
+  device: "cuda"  # hoặc "cpu"
+
+geometry:
+  # Kích thước ảnh chuẩn hóa (canonical canvas) sau khi warp Homography
+  # Bàn cờ tướng tiêu chuẩn có 9 cột và 10 hàng -> 8 khoảng cách ngang, 9 khoảng cách dọc (tỉ lệ 8:9)
+  # Cộng thêm lề (margin) xung quanh để không bị cắt xén quân ở mép bàn
+  canvas_width: 720
+  canvas_height: 800
+  margin_x: 40  # Pixel lề trái/phải
+  margin_y: 40  # Pixel lề trên/dưới
+  
+  # Cấu hình lưới chuẩn hóa
+  num_cols: 9
+  num_rows: 10
+
+camera_calibration:
+  # Cấu hình khử méo ống kính (Lens distortion) nếu camera bị méo góc rộng (Fisheye/Barrel)
+  enable_undistort: false
+  # Ma trận camera K: [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
+  camera_matrix: null
+  # Hệ số méo D: [k1, k2, p1, p2, k3]
+  dist_coeffs: null
+
+occlusion_recovery:
+  # Cho phép tự động khôi phục 1 góc bị che dựa trên công thức hình bình hành D = A + C - B
+  enable_recovery: true
+  min_valid_corners: 3
+  corner_conf_threshold: 0.4
