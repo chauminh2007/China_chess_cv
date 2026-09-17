@@ -5,7 +5,11 @@ Unit tests kiểm tra các thuật toán hình học: Sắp xếp góc, Khôi ph
 import unittest
 import numpy as np
 
-from src.stage_a_board.corner_detector import order_corners_clockwise, recover_missing_corner
+from src.stage_a_board.corner_detector import (
+    order_corners_clockwise,
+    order_corners_clockwise_with_index,
+    recover_missing_corner,
+)
 from src.stage_a_board.canonical_grid import CanonicalBoardGrid
 from src.stage_a_board.rectification import HomographyRectifier, detect_board_orientation, rotate_corners_for_landscape
 
@@ -27,6 +31,79 @@ class TestGeometryAndHomography(unittest.TestCase):
         np.testing.assert_allclose(ordered[1], [500.0, 100.0])  # TR
         np.testing.assert_allclose(ordered[2], [500.0, 500.0])  # BR
         np.testing.assert_allclose(ordered[3], [100.0, 500.0])  # BL
+
+    def test_order_corners_clockwise_with_index_sort_correctness(self):
+        """
+        Kiểm tra order_corners_clockwise_with_index():
+        - sort_index phải cho phép reorder confidences đúng với tọa độ tương ứng.
+        - Đảm bảo confidences[i] sau reorder khớp với corners[i] (vd: TL).
+        Bug đã sửa: trước đây detect_corners() reorder pts nhưng KHÔNG reorder confidences,
+        khiến recover_missing_corner dùng sai confidence và phục hồi nhầm góc.
+        """
+        # Model trả về 4 điểm theo thứ tự TÙY Ý (giả lập thứ tự model output)
+        raw_pts = np.array([
+            [500.0, 500.0],  # index 0 -> thực ra là BR
+            [100.0, 100.0],  # index 1 -> thực ra là TL
+            [100.0, 500.0],  # index 2 -> thực ra là BL
+            [500.0, 100.0],  # index 3 -> thực ra là TR
+        ], dtype=np.float32)
+
+        # Gán confidence khác nhau mỗi điểm để dễ kiểm tra sau reorder
+        raw_confidences = np.array([0.55, 0.95, 0.30, 0.70], dtype=np.float32)
+        # Theo thứ tự gốc: BR=0.55, TL=0.95, BL=0.30, TR=0.70
+
+        ordered_pts, sort_index = order_corners_clockwise_with_index(raw_pts)
+        ordered_confidences = raw_confidences[sort_index]
+
+        # Kết quả mong đợi sau reorder: [TL, TR, BR, BL]
+        np.testing.assert_allclose(ordered_pts[0], [100.0, 100.0])  # TL
+        np.testing.assert_allclose(ordered_pts[1], [500.0, 100.0])  # TR
+        np.testing.assert_allclose(ordered_pts[2], [500.0, 500.0])  # BR
+        np.testing.assert_allclose(ordered_pts[3], [100.0, 500.0])  # BL
+
+        # Confidence sau reorder phải khớp với điểm tương ứng:
+        # TL (index gốc 1) -> conf 0.95
+        self.assertAlmostEqual(ordered_confidences[0], 0.95)
+        # TR (index gốc 3) -> conf 0.70
+        self.assertAlmostEqual(ordered_confidences[1], 0.70)
+        # BR (index gốc 0) -> conf 0.55
+        self.assertAlmostEqual(ordered_confidences[2], 0.55)
+        # BL (index gốc 2) -> conf 0.30
+        self.assertAlmostEqual(ordered_confidences[3], 0.30)
+
+        # Xác minh thêm: order_corners_clockwise() cũ vẫn cho cùng kết quả tọa độ
+        legacy_ordered = order_corners_clockwise(raw_pts)
+        np.testing.assert_allclose(ordered_pts, legacy_ordered)
+
+    def test_recover_missing_corner_two_occluded_returns_false_with_warning(self):
+        """
+        Kiểm tra recover_missing_corner() khi ≥2 góc bị che:
+        - Phải trả về (corners, False, None) — không suy diễn được.
+        - Phải emit logger.warning (không im lặng bỏ qua).
+        Điều này giúp pipeline phát hiện và drop frame thay vì warp với dữ liệu sai.
+        """
+        corners = np.array([
+            [100.0, 100.0],
+            [500.0, 120.0],
+            [520.0, 600.0],
+            [120.0, 580.0],
+        ], dtype=np.float32)
+
+        # 2 góc bị che (TL và BL đều dưới ngưỡng 0.4)
+        visibilities = np.array([0.1, 1.0, 1.0, 0.2])
+
+        with self.assertLogs("src.stage_a_board.corner_detector", level="WARNING") as log_ctx:
+            result_corners, is_recovered, recovered_idx = recover_missing_corner(
+                corners, visibilities, conf_threshold=0.4
+            )
+
+        self.assertFalse(is_recovered)
+        self.assertIsNone(recovered_idx)
+        # Đảm bảo có ít nhất 1 warning được emit
+        self.assertTrue(
+            any("2" in msg or "góc bị che" in msg for msg in log_ctx.output),
+            msg="Phải có warning rõ ràng khi ≥2 góc bị che",
+        )
 
     def test_recover_missing_corners_all_four_cases(self):
         """Kiểm tra công thức phục hồi góc bị che cho cả 4 vị trí: TL, TR, BR, BL"""

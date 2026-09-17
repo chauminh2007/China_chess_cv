@@ -233,6 +233,24 @@ class XiangqiVisionPipeline:
         if corners_result is None:
             return self._make_failure_result("Giai đoạn A thất bại: Không thể tìm thấy 4 góc bàn cờ.")
 
+        # Kiểm tra trường hợp ≥2 góc bị che: recover_missing_corner chỉ xử lý được đúng 1 góc.
+        # Nếu có từ 2 góc trở lên dưới ngưỡng confidence và chưa được phục hồi
+        # (is_recovered=False nhưng vẫn có góc confidence thấp) -> drop frame.
+        # Tránh tiếp tục với 4 góc mà một số tọa độ không đáng tin, gây warp sai hoàn toàn.
+        if not corners_result.is_recovered:
+            occ_cfg = self.configs.get("stage_a", {}).get("occlusion_recovery", {})
+            conf_threshold = occ_cfg.get(
+                "corner_conf_threshold",
+                self.corner_detector.corner_conf_threshold,
+            )
+            num_occluded = int(np.sum(corners_result.confidences < conf_threshold))
+            if num_occluded >= 2:
+                return self._make_failure_result(
+                    f"Giai đoạn A thất bại: {num_occluded} góc bị che (confidence < {conf_threshold:.2f}) "
+                    "và không thể phục hồi hình học (cần ≥3 góc rõ). "
+                    "Vui lòng điều chỉnh góc camera hoặc loại bỏ vật che khuất."
+                )
+
         # ----- BƯỚC 3 (GIAI ĐOẠN A): Warp ảnh về góc nhìn thẳng đứng -----
         # Sau bước này, ảnh luôn có kích thước cố định bất kể góc chụp ban đầu
         warped_board = self._run_stage_a_warp(undistorted_image, corners_result)

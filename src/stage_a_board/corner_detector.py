@@ -2,10 +2,13 @@
 Phát hiện 4 góc bàn cờ (YOLO-Pose Corner Detector) và Thuật toán khôi phục góc bị che.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
 import numpy as np
 import cv2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -17,25 +20,47 @@ class BoardCornersResult:
     recovered_corner_index: Optional[int] = None  # Chỉ số góc (0..3) được phục hồi
 
 
-def order_corners_clockwise(pts: np.ndarray) -> np.ndarray:
+def order_corners_clockwise_with_index(pts: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Sắp xếp 4 điểm bất kỳ theo thứ tự chuẩn: [Top-Left, Top-Right, Bottom-Right, Bottom-Left].
+    Trả về cả mảng chỉ số hoán vị (sort_index) để caller có thể áp cùng permutation
+    lên các mảng liên kết (ví dụ: confidences) nhằm đảm bảo confidences[i] luôn
+    tương ứng với corners[i] sau khi sắp xếp lại.
+
+    Returns:
+        ordered_pts  : np.ndarray shape (4, 2) — các điểm đã sắp xếp [TL, TR, BR, BL]
+        sort_index   : np.ndarray shape (4,) dtype int — chỉ số nguyên bản tương ứng,
+                       sao cho ordered_pts[i] == pts[sort_index[i]]
     """
     pts = np.array(pts, dtype=np.float32)
     if pts.shape != (4, 2):
         raise ValueError(f"Kỳ vọng mảng (4, 2), nhận được {pts.shape}")
 
-    # Tính tổng x + y
+    # Tính tổng x + y để xác định TL (min) và BR (max)
     s = pts.sum(axis=1)
-    tl = pts[np.argmin(s)]
-    br = pts[np.argmax(s)]
+    tl_idx = int(np.argmin(s))
+    br_idx = int(np.argmax(s))
 
-    # Tính hiệu y - x
+    # Tính hiệu y - x để xác định TR (min) và BL (max)
     diff = np.diff(pts, axis=1).flatten()  # y - x
-    tr = pts[np.argmin(diff)]
-    bl = pts[np.argmax(diff)]
+    tr_idx = int(np.argmin(diff))
+    bl_idx = int(np.argmax(diff))
 
-    return np.array([tl, tr, br, bl], dtype=np.float32)
+    sort_index = np.array([tl_idx, tr_idx, br_idx, bl_idx], dtype=np.intp)
+    ordered_pts = pts[sort_index]
+    return ordered_pts, sort_index
+
+
+def order_corners_clockwise(pts: np.ndarray) -> np.ndarray:
+    """
+    Sắp xếp 4 điểm bất kỳ theo thứ tự chuẩn: [Top-Left, Top-Right, Bottom-Right, Bottom-Left].
+
+    Lưu ý: Hàm này CHỈ trả về các điểm đã sắp xếp, không trả về sort_index.
+    Nếu cần áp cùng permutation lên mảng liên kết (ví dụ confidences),
+    hãy dùng order_corners_clockwise_with_index() thay thế.
+    """
+    ordered_pts, _ = order_corners_clockwise_with_index(pts)
+    return ordered_pts
 
 
 def recover_missing_corner(
@@ -76,7 +101,17 @@ def recover_missing_corner(
 
         return corners, True, missing_idx
 
-    # Nếu mất từ 2 góc trở lên thì không đủ thông tin hình học suy diễn
+    # Nếu mất từ 2 góc trở lên thì không đủ thông tin hình học để suy diễn.
+    # Trả về (corners_gốc, False, None) — caller cần kiểm tra num_valid để biết
+    # đây là trường hợp "không đủ góc" chứ không phải "đủ 4 góc nhưng không cần phục hồi".
+    num_missing = 4 - int(num_valid)
+    logger.warning(
+        "recover_missing_corner: %d góc bị che (< ngưỡng %.2f) — "
+        "không đủ thông tin hình học để phục hồi. "
+        "Pipeline nên bỏ frame này hoặc yêu cầu người dùng điều chỉnh camera.",
+        num_missing,
+        conf_threshold,
+    )
     return corners, False, None
 
 
@@ -128,21 +163,28 @@ class BoardCornerDetector:
             # Lấy keypoints của bàn cờ có confidence cao nhất
             keypoints_data = results[0].keypoints.data.cpu().numpy()[0]  # shape (4, 3) -> [x, y, conf]
             raw_pts = keypoints_data[:, :2]
-            confidences = keypoints_data[:, 2]
+            raw_confidences = keypoints_data[:, 2]
 
-            # Sắp xếp theo thứ tự TL, TR, BR, BL
-            ordered_pts = order_corners_clockwise(raw_pts)
+            # Sắp xếp theo thứ tự TL, TR, BR, BL.
+            # QUAN TRỌNG: dùng order_corners_clockwise_with_index() để lấy sort_index,
+            # sau đó áp CÙNG permutation lên confidences — đảm bảo confidences[i]
+            # luôn tương ứng với corners[i] sau khi reorder.
+            # Nếu chỉ reorder pts mà giữ nguyên confidences (thứ tự model output),
+            # recover_missing_corner sẽ dùng sai confidence và có thể phục hồi
+            # nhầm góc đang hiện rõ, bỏ qua góc thực sự bị che.
+            ordered_pts, sort_index = order_corners_clockwise_with_index(raw_pts)
+            ordered_confidences = raw_confidences[sort_index]
 
             if self.enable_recovery:
                 final_corners, is_recovered, recovered_idx = recover_missing_corner(
-                    ordered_pts, confidences, self.corner_conf_threshold
+                    ordered_pts, ordered_confidences, self.corner_conf_threshold
                 )
             else:
                 final_corners, is_recovered, recovered_idx = ordered_pts, False, None
 
             return BoardCornersResult(
                 corners=final_corners,
-                confidences=confidences,
+                confidences=ordered_confidences,  # trả confidence đã reorder, khớp với corners
                 is_recovered=is_recovered,
                 recovered_corner_index=recovered_idx,
             )
