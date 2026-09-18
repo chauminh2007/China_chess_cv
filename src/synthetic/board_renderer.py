@@ -58,28 +58,148 @@ class SyntheticXiangqiRenderer:
         self.grid = grid or CanonicalBoardGrid(canvas_width=720, canvas_height=800, margin_x=40, margin_y=40)
         self.font_path = font_path
 
-    def _get_pil_font(self, size: int) -> ImageFont.ImageFont:
-        """Tải font chữ Hán hoặc font mặc định hệ thống"""
-        # Thử một số font tiếng Hoa / CJK phổ biến trên Windows
-        windows_cjk_fonts = [
-            "simsun.ttc", "simhei.ttf", "msyh.ttc", "kaiu.ttf", "mingliu.ttc",
-            "C:\\Windows\\Fonts\\simsun.ttc", "C:\\Windows\\Fonts\\simhei.ttf",
-            "C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\arial.ttf"
+    @staticmethod
+    def _font_can_render_cjk(font: ImageFont.FreeTypeFont) -> bool:
+        """Kiểm tra thực nghiệm xem font có thực sự vẽ được ký tự CJK hay không.
+
+        Phương pháp: vẽ một ký tự đơn giản (車) và một ký tự phức tạp (將) lên
+        canvas nhỏ, rồi đo diện tích "mực" (pixel tối). Nếu cả hai đều cho ra
+        diện tích bằng nhau VÀ bằng diện tích của ký tự ASCII thông thường,
+        tức font đang render glyph thay thế (replacement box) cho mọi ký tự CJK —
+        trường hợp điển hình của ImageFont.load_default() hay font Latin thuần túy.
+
+        Returns:
+            True  — font vẽ được CJK đúng (các ký tự khác nhau cho pixel khác nhau)
+            False — font KHÔNG vẽ được CJK (mọi ký tự CJK trông giống hệt nhau)
+        """
+        test_pairs = [
+            ("\u8eca", "\u5c07"),   # 車 vs 將  (đơn giản vs phức tạp)
+            ("\u5175", "\u7832"),   # 兵 vs 炮  (thêm 1 cặp để giảm false-positive)
         ]
+        try:
+            for char_a, char_b in test_pairs:
+                # Vẽ lên canvas 64×64 nền trắng
+                size_px = (64, 64)
+                img_a = Image.new("L", size_px, 255)
+                img_b = Image.new("L", size_px, 255)
+                ImageDraw.Draw(img_a).text((4, 4), char_a, font=font, fill=0)
+                ImageDraw.Draw(img_b).text((4, 4), char_b, font=font, fill=0)
 
-        if self.font_path and os.path.exists(self.font_path):
-            try:
-                return ImageFont.truetype(self.font_path, size)
-            except Exception:
-                pass
+                # Đếm số pixel tối (< 128)
+                ink_a = int(np.sum(np.array(img_a) < 128))
+                ink_b = int(np.sum(np.array(img_b) < 128))
 
-        for f in windows_cjk_fonts:
+                # Nếu cả hai đều không có mực → font không vẽ CJK
+                if ink_a == 0 and ink_b == 0:
+                    return False
+
+                # Nếu cả hai bằng nhau → glyph giả (replacement box)
+                # Cho phép sai lệch ≤ 5 pixel (nhiễu sub-pixel nhỏ)
+                if abs(ink_a - ink_b) <= 5:
+                    return False
+
+            return True
+        except Exception:
+            return False
+
+    def _get_pil_font(self, size: int) -> ImageFont.FreeTypeFont:
+        """Tải font CJK hợp lệ với fallback đa nền tảng.
+
+        Thứ tự ưu tiên:
+          1. font_path do người dùng chỉ định (constructor)
+          2. Danh sách font CJK phổ biến trên Windows / Linux / macOS
+          3. Biến môi trường XIANGQI_FONT_PATH
+
+        Raises:
+            RuntimeError: Nếu không tìm được font nào thực sự vẽ được ký tự CJK.
+                Điều này ngăn pipeline âm thầm tạo ra data hỏng (mọi quân cờ
+                trông giống hệt nhau, khiến Stage C không thể học phân loại).
+        """
+        # Danh sách font CJK trên từng hệ điều hành
+        candidate_fonts = []
+
+        # 1. Người dùng chỉ định
+        if self.font_path:
+            candidate_fonts.append(self.font_path)
+
+        # 2. Biến môi trường
+        env_font = os.environ.get("XIANGQI_FONT_PATH", "")
+        if env_font:
+            candidate_fonts.append(env_font)
+
+        # 3. Windows
+        candidate_fonts.extend([
+            r"C:\Windows\Fonts\simsun.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\msyhbd.ttc",
+            r"C:\Windows\Fonts\kaiu.ttf",
+            r"C:\Windows\Fonts\mingliu.ttc",
+            r"C:\Windows\Fonts\msjh.ttc",
+        ])
+
+        # 4. Linux — Noto CJK (phổ biến nhất, có trong hầu hết distro)
+        candidate_fonts.extend([
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-cjk/NotoSansCJKsc-Regular.otf",
+            # WenQuanYi — fallback phổ biến trên Debian/Ubuntu
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            # AR PL fonts
+            "/usr/share/fonts/truetype/arphic/uming.ttc",
+            "/usr/share/fonts/truetype/arphic/ukai.ttc",
+        ])
+
+        # 5. macOS
+        candidate_fonts.extend([
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/Library/Fonts/Arial Unicode MS.ttf",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+        ])
+
+        # Thử lần lượt — dùng _font_can_render_cjk() để xác nhận
+        tried: list[str] = []
+        for path in candidate_fonts:
+            if not path or not os.path.exists(path):
+                continue
+            tried.append(path)
             try:
-                return ImageFont.truetype(f, size)
+                font = ImageFont.truetype(path, size)
+                if self._font_can_render_cjk(font):
+                    return font
+                # Font load được nhưng không vẽ CJK (ví dụ: font Latin trong file .ttc)
             except Exception:
                 continue
 
-        return ImageFont.load_default()
+        # Không tìm được font hợp lệ — raise lỗi rõ ràng thay vì âm thầm tạo data hỏng
+        raise RuntimeError(
+            "Không tìm được font CJK hợp lệ để vẽ quân cờ tướng.\n"
+            "\n"
+            "Nguyên nhân: ImageFont.load_default() của Pillow không hỗ trợ Unicode/CJK.\n"
+            "Nếu tiếp tục mà không có font, mọi 14 lớp quân cờ sẽ trông giống hệt nhau\n"
+            "(chỉ khác màu đỏ/đen), khiến Stage C không thể học phân loại.\n"
+            "\n"
+            "Cách khắc phục (chọn 1):\n"
+            "  A. Cài font Noto CJK:\n"
+            "       Ubuntu/Debian : sudo apt-get install fonts-noto-cjk\n"
+            "       Fedora/RHEL   : sudo dnf install google-noto-sans-cjk-fonts\n"
+            "       macOS         : brew install --cask font-noto-sans-cjk\n"
+            "       Windows       : Cài 'East Asian Language Pack' hoặc tải SimSun/SimHei\n"
+            "\n"
+            "  B. Đặt biến môi trường:\n"
+            "       XIANGQI_FONT_PATH=/đường/dẫn/đến/font.ttc\n"
+            "\n"
+            "  C. Truyền font_path khi khởi tạo:\n"
+            "       SyntheticXiangqiRenderer(font_path='/đường/dẫn/đến/font.ttc')\n"
+            "\n"
+            f"Các font đã thử (tồn tại nhưng không vẽ được CJK, hoặc không tìm thấy):\n"
+            f"  {tried if tried else '(không có file nào tồn tại)'}"
+        )
 
     def _generate_board_canvas(self) -> Image.Image:
         """Tạo ảnh nền bàn cờ với màu gỗ/giấy vàng và đường kẻ"""
