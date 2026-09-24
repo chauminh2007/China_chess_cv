@@ -56,19 +56,22 @@ class XiangqiStreamProcessor:
         self.last_fen: str = ""
         self.last_warped_board: Optional[np.ndarray] = None
 
-    def initialize_board(self, frame: np.ndarray) -> bool:
+    def initialize_board(self, undistorted_frame: np.ndarray) -> bool:
         """
         Khởi tạo Giai đoạn A: Tìm 4 góc bàn và tính ma trận Homography.
+
+        Args:
+            undistorted_frame: Ảnh đã qua undistort từ CameraCalibrator.
+                               KHÔNG gọi undistort() bên trong hàm này để tránh áp 2 lần
+                               (undistort không phải phép biến đổi idempotent).
         """
-        undistorted = self.calibrator.undistort(frame)
-        corners_res = self.corner_detector.detect_corners(undistorted)
+        corners_res = self.corner_detector.detect_corners(undistorted_frame)
 
         if corners_res is not None:
             self.rectifier.compute_homography(corners_res.corners)
             self.last_corners_result = corners_res
             self.is_board_localized = True
-            self.last_stage_a_time = time.time()
-            self.change_detector.reset_baseline(undistorted)
+            self.change_detector.reset_baseline(undistorted_frame)
             return True
         return False
 
@@ -94,7 +97,12 @@ class XiangqiStreamProcessor:
 
         # 1. Kiểm tra nếu chưa định vị bàn cờ hoặc đến chu kỳ kiểm tra drift
         if not self.is_board_localized or (now - self.last_stage_a_time > self.stage_a_interval_sec):
-            success = self.initialize_board(undistorted)
+            # Cập nhật timestamp TRƯỚC KHI thử — đảm bảo throttle luôn hoạt động
+            # dù detect_corners thành công hay thất bại (tay che bàn, nhiễu, v.v.)
+            # Nếu không làm vậy: khi detect thất bại, last_stage_a_time không đổi
+            # → frame kế tiếp điều kiện > 30s vẫn đúng → Stage A bị gọi mọi frame.
+            self.last_stage_a_time = now
+            self.initialize_board(undistorted)
             if not self.is_board_localized:
                 return {
                     "status": "AWAITING_BOARD_SETUP",

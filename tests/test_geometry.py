@@ -4,6 +4,7 @@ Unit tests kiểm tra các thuật toán hình học: Sắp xếp góc, Khôi ph
 
 import unittest
 import numpy as np
+import cv2
 
 from src.stage_a_board.corner_detector import (
     order_corners_clockwise,
@@ -234,27 +235,63 @@ class TestGeometryAndHomography(unittest.TestCase):
     def test_homography_landscape_produces_portrait_output(self):
         """
         Kiểm tra end-to-end: Bàn cờ nằm ngang khi qua Homography phải cho ra ảnh dọc đúng tỉ lệ.
-        Cụ thể: Điểm TL của canonical phải nằm ở góc trên-trái canvas.
+
+        Kiểm tra thêm chiều vật lý (physical direction):
+            Theo quy ước Cờ Tướng: quân Đỏ ở phía dưới (row 9, y lớn trên canonical).
+            Khi bàn đặt nằm ngang (landscape), quy ước: phía Đỏ ở bên PHẢI (TR, BR).
+            Sau khi xoay 90° ngược chiều kim đồng hồ:
+                - BL_cũ → TL_mới → map tới góc trên-trái canvas (y nhỏ)
+                - BR_cũ → BL_mới → map tới góc dưới-trái canvas (y lớn)
+
+            Nếu xoay sai chiều, quân Đỏ sẽ xuất hiện ở row 0 thay vì row 9
+            — đây là bug chiều vật lý cần phát hiện sớm.
+
+        Lưu ý: Test này xác minh bằng hình học (không cần ảnh thật).
+        Vẫn nên thực hiện kiểm tra thực nghiệm bằng cách chụp ảnh bàn cờ nằm ngang
+        và xác nhận quân Đỏ xuất hiện đúng ở hàng 9 sau warp.
         """
         grid = CanonicalBoardGrid(canvas_width=720, canvas_height=800, margin_x=40, margin_y=40)
         rectifier = HomographyRectifier(grid)
 
         # Bàn cờ nằm ngang (rộng 800, cao 500 trong ảnh gốc)
+        # Quy ước: phía Đỏ ở bên phải (cạnh TR-BR), phía Đen ở bên trái (cạnh TL-BL)
         landscape_src = np.array([
-            [50.0,  100.0],   # TL
-            [850.0, 100.0],   # TR
-            [850.0, 600.0],   # BR
-            [50.0,  600.0],   # BL
+            [50.0,  100.0],   # TL — phía Đen (top-left khi nhìn ngang)
+            [850.0, 100.0],   # TR — phía Đỏ (top-right khi nhìn ngang)
+            [850.0, 600.0],   # BR — phía Đỏ (bottom-right khi nhìn ngang)
+            [50.0,  600.0],   # BL — phía Đen (bottom-left khi nhìn ngang)
         ], dtype=np.float32)
 
         H = rectifier.compute_homography(landscape_src)
 
+        # --- Kiểm tra cơ bản ---
         # Orientation phải được phát hiện là landscape
         self.assertEqual(rectifier.detected_orientation, "landscape")
 
         # Ma trận H phải hợp lệ (3x3, không singular)
         self.assertEqual(H.shape, (3, 3))
         self.assertGreater(abs(np.linalg.det(H)), 1e-6)
+
+        # --- Kiểm tra chiều vật lý (physical direction assertion) ---
+        # Sau xoay 90° ngược chiều kim đồng hồ: BL_cũ → TL_mới
+        # TL_mới phải được map tới TL của canonical canvas → y_canonical nhỏ (gần 0)
+        # Nếu xoay SAI chiều: BL_cũ → BL_mới → y_canonical lớn (gần 800)
+        #   → quân Đen sẽ bị warp vào vùng hàng 9 (phía Đỏ) — bug chiều vật lý.
+
+        old_bl = np.array([[landscape_src[3]]], dtype=np.float32)  # BL cũ, shape (1,1,2)
+        # Dùng perspective transform để lấy tọa độ canonical của điểm BL_cũ
+        bl_canonical = cv2.perspectiveTransform(old_bl, H)[0][0]  # shape (2,)
+
+        canvas_height = grid.canvas_height  # 800
+        canvas_mid_y = canvas_height / 2.0  # 400
+
+        self.assertLess(
+            bl_canonical[1],
+            canvas_mid_y,
+            f"BL_cũ (phía Đen khi bàn ngang) phải được warp vào NỬA TRÊN canonical canvas "
+            f"(y < {canvas_mid_y:.0f}), nhưng nhận y = {bl_canonical[1]:.1f}. "
+            "Điều này cho thấy chiều xoay sai — quân Đen sẽ xuất hiện ở phía Đỏ sau warp."
+        )
 
 
 if __name__ == "__main__":
